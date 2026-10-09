@@ -1,0 +1,7 @@
+{
+  "name": "CatchUp AI",
+  "description": "CatchUp AI turns exported WhatsApp chats into a structured catch-up report with action items, decisions, and summaries.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

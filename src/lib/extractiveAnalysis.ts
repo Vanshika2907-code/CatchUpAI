@@ -17,7 +17,7 @@ export function buildExtractiveAnalysis(messages: ChatMessage[], reason: string)
 
   return {
     quickSummary: buildSummary(conversationalMessages),
-    importantMessages: importantCandidates.slice(0, 8).map((message, index) => ({
+    importantMessages: importantCandidates.slice(0, 30).map((message, index) => ({
       id: `important-${message.index}-${index + 1}`,
       title: summarizeTitle(message.text),
       summary: summarizeSentence(message.text),
@@ -25,14 +25,14 @@ export function buildExtractiveAnalysis(messages: ChatMessage[], reason: string)
       confidence: confidenceFor(message.text),
       evidence: [evidenceFor(message)]
     })),
-    decisions: decisionCandidates.slice(0, 6).map((message, index) => ({
+    decisions: decisionCandidates.slice(0, 25).map((message, index) => ({
       id: `decision-${message.index}-${index + 1}`,
       decision: summarizeSentence(message.text),
       priority: priorityFor(message.text),
       confidence: confidenceFor(message.text),
       evidence: [evidenceFor(message)]
     })),
-    actionItems: actionCandidates.slice(0, 8).map((message, index) => ({
+    actionItems: actionCandidates.slice(0, 30).map((message, index) => ({
       id: `action-${message.index}-${index + 1}`,
       task: summarizeSentence(message.text),
       owner: inferOwner(message),
@@ -42,7 +42,7 @@ export function buildExtractiveAnalysis(messages: ChatMessage[], reason: string)
       commitmentType: 'inferred',
       evidence: [evidenceFor(message)]
     })),
-    unansweredQuestions: questionCandidates.slice(-8).map((message, index) => ({
+    unansweredQuestions: questionCandidates.slice(-25).map((message, index) => ({
       id: `question-${message.index}-${index + 1}`,
       question: summarizeQuestion(message.text),
       askedBy: message.sender ?? 'unknown',
@@ -51,7 +51,7 @@ export function buildExtractiveAnalysis(messages: ChatMessage[], reason: string)
       evidence: [evidenceFor(message)]
     })),
     limitations: [
-      'The local model did not return valid structured JSON, so CatchUp AI used a conservative keyword-based local fallback.',
+      'CatchUp AI processed this conversation locally in your browser using a keyword-based local fallback.',
       reason
     ]
   };

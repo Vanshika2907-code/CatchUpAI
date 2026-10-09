@@ -34,22 +34,43 @@ async function getGenerator() {
     post({
       type: 'status',
       status: 'loading-model',
-      detail: 'Downloading the local analysis model. Your chat stays in this browser.'
+      detail: 'Initializing local analysis model. Your chat stays in this browser.'
     });
 
-    const device = 'gpu' in navigator ? 'webgpu' : 'wasm';
-    generatorPromise = pipeline('text2text-generation', MODEL_ID, {
-      device,
-      dtype: device === 'webgpu' ? 'fp32' : 'q8',
-      progress_callback: (progress: { status?: string; progress?: number; file?: string }) => {
-        post({
-          type: 'status',
-          status: 'loading-model',
-          detail: progress.file ? `Loading ${progress.file}` : progress.status,
-          progress: typeof progress.progress === 'number' ? progress.progress : undefined
-        });
+    generatorPromise = (async () => {
+      const hasGpu = typeof navigator !== 'undefined' && 'gpu' in navigator && Boolean((navigator as any).gpu);
+      if (hasGpu) {
+        try {
+          return await pipeline('text2text-generation', MODEL_ID, {
+            device: 'webgpu',
+            dtype: 'fp32',
+            progress_callback: (progress: any) => {
+              post({
+                type: 'status',
+                status: 'loading-model',
+                detail: progress.file ? `Loading ${progress.file}` : progress.status,
+                progress: typeof progress.progress === 'number' ? progress.progress : undefined
+              });
+            }
+          });
+        } catch {
+          // WebGPU adapter or pipeline failed, try WASM
+        }
       }
-    });
+
+      return await pipeline('text2text-generation', MODEL_ID, {
+        device: 'wasm',
+        dtype: 'q8',
+        progress_callback: (progress: any) => {
+          post({
+            type: 'status',
+            status: 'loading-model',
+            detail: progress.file ? `Loading ${progress.file}` : progress.status,
+            progress: typeof progress.progress === 'number' ? progress.progress : undefined
+          });
+        }
+      });
+    })();
   }
   return generatorPromise;
 }
@@ -175,6 +196,11 @@ self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
     .then((result) => post({ type: 'result', result }))
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : 'Local AI failed unexpectedly.';
-      post({ type: 'error', error: message });
+      try {
+        const fallback = buildExtractiveAnalysis(event.data.messages, `Worker note: ${message}`);
+        post({ type: 'result', result: fallback });
+      } catch {
+        post({ type: 'error', error: message });
+      }
     });
 });

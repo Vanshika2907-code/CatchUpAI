@@ -2,8 +2,8 @@ import 'dotenv/config';
 import { z } from 'zod';
 
 const configSchema = z.object({
-  PORT: z.coerce.number().int().positive().default(8787),
-  CORS_ORIGIN: z.string().default('http://127.0.0.1:5173'),
+  PORT: z.coerce.number().int().positive().default(3000),
+  CORS_ORIGIN: z.string().default('*'),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default('gemini-3.8-flash'),
   ENABLE_SERVER_LOCAL_AI: z

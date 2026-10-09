@@ -16,6 +16,21 @@ by 5 PM
     expect(messages[2]).toMatchObject({ sender: null, isSystem: true });
   });
 
+  it('parses iOS bracketed exports, dot-separated dates, and LTR marks', () => {
+    const text = `\u200E[12/01/2024, 09:01:15] Alice: iOS style message
+[12.01.24, 14:30] Bob: Dot date message
+12/01/2024, 15:45 – Charlie: En-dash message
+[09:01, 12/01/2024] Dana: Time first message`;
+
+    const messages = parseWhatsAppExport(text);
+
+    expect(messages).toHaveLength(4);
+    expect(messages[0]).toMatchObject({ sender: 'Alice', text: 'iOS style message', isSystem: false });
+    expect(messages[1]).toMatchObject({ sender: 'Bob', text: 'Dot date message', isSystem: false });
+    expect(messages[2]).toMatchObject({ sender: 'Charlie', text: 'En-dash message', isSystem: false });
+    expect(messages[3]).toMatchObject({ sender: 'Dana', text: 'Time first message', isSystem: false });
+  });
+
   it('chunks without dropping messages', () => {
     const messages = parseWhatsAppExport(`1/1/24, 10:00 AM - A: ${'x'.repeat(50)}
 1/1/24, 10:01 AM - B: ${'y'.repeat(50)}

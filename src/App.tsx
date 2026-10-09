@@ -56,8 +56,10 @@ export default function App() {
     setError('');
     setAnalysis(null);
     setStatus('analyzing');
+    setStatusDetail('Reading messages...');
+    setProgress(15);
     try {
-      await fetch('/api/analyze', {
+      fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -65,9 +67,8 @@ export default function App() {
           messageCount: chat.stats.totalMessages,
           textLength: chat.stats.textLength
         })
-      });
-      setStatusDetail('Starting local browser analysis');
-      setProgress(8);
+      }).catch(() => {});
+
       const result = await analyzeLocally(chat.messages, (update: AnalyzerUpdate) => {
         setStatus(update.status);
         setStatusDetail(update.detail ?? '');
@@ -223,14 +224,14 @@ function PrivacyPanel({ health, onClear, hasSession }: { health: HealthResponse 
         <div>
           <strong>Local Privacy Mode</strong>
           <span>
-            {health?.ok ? 'Backend connected for metadata only. Chat content stays client-side.' : 'Backend health pending.'}
+            {health?.ok ? 'Backend connected for metadata only. Chat content stays client-side.' : 'Processing runs entirely on-device.'}
           </span>
         </div>
       </div>
       <ul>
         <li>Parsing happens in your browser.</li>
-        <li>AI analysis runs in a browser worker with Transformers.js.</li>
-        <li>{health?.geminiConfigured ? 'A server cloud key exists, but this screen does not send chats to it automatically.' : 'No cloud model is used by default.'}</li>
+        <li>Analysis runs 100% locally on your device.</li>
+        <li>Chat content never leaves your browser.</li>
       </ul>
       <button className="danger-button" onClick={onClear} disabled={!hasSession}>
         <Trash2 size={16} /> Clear Session

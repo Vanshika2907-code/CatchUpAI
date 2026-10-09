@@ -1,22 +1,34 @@
 import type { ChatMessage, ChatStats, ImportedChat } from '../types';
 
-const MAX_FILE_BYTES = 2.5 * 1024 * 1024;
-const MAX_ZIP_BYTES = 25 * 1024 * 1024;
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_ZIP_BYTES = 50 * 1024 * 1024;
 const utf8FatalDecoder = new TextDecoder('utf-8', { fatal: true });
 const utf16LeDecoder = new TextDecoder('utf-16le');
 const utf16BeDecoder = new TextDecoder('utf-16be');
 const windows1252Decoder = new TextDecoder('windows-1252');
 
-const patterns = [
-  /^\[?(\d{1,2}\/\d{1,2}\/\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?\s?(?:AM|PM|am|pm)?)\]?\s-\s([^:]+):\s([\s\S]*)$/,
-  /^\[?(\d{1,2}-\d{1,2}-\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?\s?(?:AM|PM|am|pm)?)\]?\s-\s([^:]+):\s([\s\S]*)$/,
-  /^(\d{1,2}\/\d{1,2}\/\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?\s?(?:AM|PM|am|pm)?)\s-\s([^:]+):\s([\s\S]*)$/,
-  /^(\d{1,2}\/\d{1,2}\/\d{2,4}),?\s+(\d{1,2}:\d{2})\s-\s([^:]+):\s([\s\S]*)$/
+const messagePatterns = [
+  // 1. Bracketed format with colon sender (iOS/macOS/Web): [12/04/24, 14:30:00] Alice: Hello or [12/04/24, 14:30] - Alice: Hello
+  /^\[(\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[a-zA-Z]{1,4}\.?)?)\](?:\s*[-–—])?\s+([^:]+):\s([\s\S]*)$/,
+
+  // 2. Bracketed inverted format: [14:30:00, 12/04/24] Alice: Hello
+  /^\[(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[a-zA-Z]{1,4}\.?)?),?\s+(\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4})\](?:\s*[-–—])?\s+([^:]+):\s([\s\S]*)$/,
+
+  // 3. Standard Dash format (Android/Windows/Web): 12/04/24, 14:30 - Alice: Hello (handles -, –, —)
+  /^(\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[a-zA-Z]{1,4}\.?)?)\s*[-–—]\s*([^:]+):\s([\s\S]*)$/,
+
+  // 4. Inverted Dash format: 14:30, 12/04/24 - Alice: Hello
+  /^(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[a-zA-Z]{1,4}\.?)?),?\s+(\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4})\s*[-–—]\s*([^:]+):\s([\s\S]*)$/
 ];
 
 const systemPatterns = [
-  /^\[?(\d{1,2}\/\d{1,2}\/\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?\s?(?:AM|PM|am|pm)?)\]?\s-\s([\s\S]*)$/,
-  /^(\d{1,2}-\d{1,2}-\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?\s?(?:AM|PM|am|pm)?)\s-\s([\s\S]*)$/
+  // Bracketed system messages: [12/04/24, 14:30] Messages and calls are end-to-end encrypted
+  /^\[(\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[a-zA-Z]{1,4}\.?)?)\](?:\s*[-–—])?\s+([\s\S]*)$/,
+  /^\[(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[a-zA-Z]{1,4}\.?)?),?\s+(\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4})\](?:\s*[-–—])?\s+([\s\S]*)$/,
+
+  // Standard dash system messages: 12/04/24, 14:30 - Messages and calls are end-to-end encrypted
+  /^(\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[a-zA-Z]{1,4}\.?)?)\s*[-–—]\s*([\s\S]*)$/,
+  /^(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[a-zA-Z]{1,4}\.?)?),?\s+(\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4})\s*[-–—]\s*([\s\S]*)$/
 ];
 
 export function validateChatFile(file: File): string | null {
@@ -31,7 +43,7 @@ export function validateChatFile(file: File): string | null {
     return 'That file is empty. Export the chat as a .txt or .zip file and try again.';
   }
   if (isTextExport && file.size > MAX_FILE_BYTES) {
-    return 'This export is too large for the in-browser model. Try a smaller date range under 2.5 MB.';
+    return 'This export is too large for the in-browser model. Try a smaller date range under 25 MB.';
   }
   if (isZipExport && file.size > MAX_ZIP_BYTES) {
     return 'This zip export is too large. Try exporting without media or choose a smaller date range.';
@@ -217,7 +229,14 @@ function looksLikeUtf16Le(bytes: Uint8Array): boolean {
 }
 
 export function parseWhatsAppExport(rawText: string): ChatMessage[] {
-  const lines = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  // Strip invisible unicode direction markers (LTR, RTL, BOM) and normalize non-breaking spaces
+  const sanitized = rawText
+    .replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '')
+    .replace(/[\u202F\u00A0]/g, ' ')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+
+  const lines = sanitized.split('\n');
   const messages: ChatMessage[] = [];
 
   for (const line of lines) {
@@ -246,23 +265,28 @@ export function parseWhatsAppExport(rawText: string): ChatMessage[] {
 }
 
 function parseLine(line: string): { timestamp: string; sender: string | null; text: string; isSystem: boolean } | null {
-  for (const pattern of patterns) {
-    const match = line.match(pattern);
+  for (let i = 0; i < messagePatterns.length; i++) {
+    const match = line.match(messagePatterns[i]);
     if (match) {
+      const isTimeFirst = i === 1 || i === 3;
+      const timestamp = isTimeFirst ? `${match[2]} ${match[1]}` : `${match[1]} ${match[2]}`;
+      const sender = match[3].replace(/^~/, '').trim();
       return {
-        timestamp: `${match[1]} ${match[2]}`,
-        sender: match[3].trim(),
+        timestamp,
+        sender,
         text: match[4],
         isSystem: false
       };
     }
   }
 
-  for (const pattern of systemPatterns) {
-    const match = line.match(pattern);
+  for (let i = 0; i < systemPatterns.length; i++) {
+    const match = line.match(systemPatterns[i]);
     if (match && !match[3].includes(': ')) {
+      const isTimeFirst = i === 1 || i === 3;
+      const timestamp = isTimeFirst ? `${match[2]} ${match[1]}` : `${match[1]} ${match[2]}`;
       return {
-        timestamp: `${match[1]} ${match[2]}`,
+        timestamp,
         sender: null,
         text: match[3].trim(),
         isSystem: true
