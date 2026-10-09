@@ -1,4 +1,5 @@
 import type { AnalysisResult } from '../types';
+import { maskSensitiveText } from './privacyShield';
 
 export function formatAnalysisForCopy(result: AnalysisResult): string {
   const lines = [
@@ -16,9 +17,11 @@ export function formatAnalysisForCopy(result: AnalysisResult): string {
     'Important messages:',
     ...result.importantMessages.map((item) => `- [${item.priority}] ${item.title}: ${item.summary}`)
   ];
-  return lines.join('\n');
+  const combined = lines.join('\n');
+  return maskSensitiveText(combined).sanitizedText;
 }
 
 export async function copyText(text: string): Promise<void> {
-  await navigator.clipboard.writeText(text);
+  const sanitized = maskSensitiveText(text).sanitizedText;
+  await navigator.clipboard.writeText(sanitized);
 }

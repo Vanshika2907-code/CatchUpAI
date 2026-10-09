@@ -4,23 +4,60 @@ import {
   Check,
   Clipboard,
   Clock,
+  Eye,
+  EyeOff,
   HelpCircle,
   LoaderCircle,
   Lock,
   Paperclip,
+  Plus,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Trash2,
   UploadCloud,
   X
 } from 'lucide-react';
-import type { AnalysisResult, AnalyzerStatus, ImportedChat, Priority } from './types';
+import type { AnalysisResult, AnalyzerStatus, ChatMessage, ImportedChat, Priority } from './types';
 import { getBackendHealth, type HealthResponse } from './lib/backend';
 import { analyzeLocally, type AnalyzerUpdate } from './lib/localAnalyzer';
 import { formatAnalysisForCopy, copyText } from './lib/copy';
 import { importChatFile, messagesToTranscript } from './lib/whatsappParser';
+import {
+  sanitizeConversation,
+  sanitizeAnalysisResult,
+  type PrivacyReport,
+  type SensitiveDetection
+} from './lib/privacyShield';
 
 const priorityOrder: Priority[] = ['urgent', 'important', 'fyi'];
+
+function formatCategoryLabel(cat: string): string {
+  switch (cat) {
+    case 'pin':
+      return 'PIN / Passcode';
+    case 'otp':
+      return 'OTP / Code';
+    case 'password':
+      return 'Password';
+    case 'api_key':
+      return 'API Key';
+    case 'email':
+      return 'Email Address';
+    case 'phone':
+      return 'Phone Number';
+    case 'financial':
+      return 'Financial / Card';
+    case 'gov_id':
+      return 'Gov ID / SSN';
+    case 'address':
+      return 'Physical Address';
+    case 'custom':
+      return 'User Private Term';
+    default:
+      return cat;
+  }
+}
 
 export default function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -32,11 +69,40 @@ export default function App() {
   const [error, setError] = useState('');
   const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all');
   const [completed, setCompleted] = useState<Set<string>>(new Set());
+  const [customTerms, setCustomTerms] = useState<string[]>([]);
+  const [customTermInput, setCustomTermInput] = useState('');
+  const [showRawPreview, setShowRawPreview] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     getBackendHealth().then(setHealth);
   }, []);
+
+  // Run privacy filter on raw messages locally before any AI step
+  const { sanitizedMessages, privacyReport } = useMemo(() => {
+    if (!chat) {
+      return {
+        sanitizedMessages: [] as ChatMessage[],
+        privacyReport: {
+          totalDetections: 0,
+          categoryCounts: {
+            pin: 0,
+            otp: 0,
+            password: 0,
+            api_key: 0,
+            email: 0,
+            phone: 0,
+            financial: 0,
+            gov_id: 0,
+            address: 0,
+            custom: 0
+          },
+          detections: [] as SensitiveDetection[]
+        } as PrivacyReport
+      };
+    }
+    return sanitizeConversation(chat.messages, customTerms);
+  }, [chat, customTerms]);
 
   async function handleFile(file: File) {
     setError('');
@@ -51,12 +117,35 @@ export default function App() {
     }
   }
 
+  function handleLoadSample() {
+    const sampleText = `09/10/2026, 10:00 AM - Alex: Team, let's sync on the cloud invoice and launch deployment.
+09/10/2026, 10:02 AM - Alex: My PIN is 1234. Please complete the payment before 5 PM today.
+09/10/2026, 10:05 AM - Sam: Payment scheduled for 5 PM. The OTP is 582941. Contact me at sam.lead@acme.org or +1 (555) 123-4567 if anything fails.
+09/10/2026, 10:08 AM - Taylor: Staging credentials: password is stagingSecret2026. The API key is sk-prod998877665544332211.
+09/10/2026, 10:12 AM - Alex: Documentation delivery address is 742 Evergreen Terrace, Suite 100.
+09/10/2026, 10:15 AM - Sam: Should we schedule the user smoke test for 3 PM?
+09/10/2026, 10:20 AM - Taylor: Agreed, let's lock in the smoke test for 3 PM.`;
+    const sampleFile = new File([sampleText], 'WhatsApp Chat - Cloud Team.txt', { type: 'text/plain' });
+    handleFile(sampleFile);
+  }
+
+  function handleAddCustomTerm(term: string) {
+    const trimmed = term.trim();
+    if (!trimmed || customTerms.includes(trimmed)) return;
+    setCustomTerms((prev) => [...prev, trimmed]);
+    setCustomTermInput('');
+  }
+
+  function handleRemoveCustomTerm(term: string) {
+    setCustomTerms((prev) => prev.filter((t) => t !== term));
+  }
+
   async function startAnalysis() {
-    if (!chat) return;
+    if (!chat || sanitizedMessages.length === 0) return;
     setError('');
     setAnalysis(null);
     setStatus('analyzing');
-    setStatusDetail('Reading messages...');
+    setStatusDetail('Privacy Shield active · Reading sanitized messages...');
     setProgress(15);
     try {
       fetch('/api/analyze', {
@@ -69,12 +158,18 @@ export default function App() {
         })
       }).catch(() => {});
 
-      const result = await analyzeLocally(chat.messages, (update: AnalyzerUpdate) => {
+      // Privacy Shield Pipeline Step:
+      // Send ONLY sanitized conversation content (never original unmasked messages)
+      const rawResult = await analyzeLocally(sanitizedMessages, (update: AnalyzerUpdate) => {
         setStatus(update.status);
         setStatusDetail(update.detail ?? '');
         setProgress(update.progress);
       });
-      setAnalysis(result);
+
+      // Privacy Shield Secondary Validation:
+      // Ensure AI results never reintroduced or leaked unmasked sensitive items
+      const validatedResult = sanitizeAnalysisResult(rawResult, customTerms);
+      setAnalysis(validatedResult);
     } catch (err) {
       setStatus('error');
       setError(err instanceof Error ? err.message : 'Analysis failed.');
@@ -89,6 +184,7 @@ export default function App() {
     setStatusDetail('');
     setProgress(undefined);
     setCompleted(new Set());
+    setShowRawPreview(false);
     if (inputRef.current) inputRef.current.value = '';
   }
 
@@ -122,21 +218,85 @@ export default function App() {
 
       <section className="workspace">
         <div className="left-column">
-          <UploadPanel inputRef={inputRef} chat={chat} error={error} onFile={handleFile} onClear={clearSession} />
-          <PrivacyPanel health={health} onClear={clearSession} hasSession={Boolean(chat || analysis)} />
+          <UploadPanel
+            inputRef={inputRef}
+            chat={chat}
+            error={error}
+            onFile={handleFile}
+            onClear={clearSession}
+            onLoadSample={handleLoadSample}
+          />
+          <PrivacyPanel
+            health={health}
+            onClear={clearSession}
+            hasSession={Boolean(chat || analysis)}
+            privacyReport={privacyReport}
+            customTerms={customTerms}
+            customTermInput={customTermInput}
+            onCustomTermInputChange={setCustomTermInput}
+            onAddCustomTerm={handleAddCustomTerm}
+            onRemoveCustomTerm={handleRemoveCustomTerm}
+          />
         </div>
-        <PreviewPanel chat={chat} onAnalyze={startAnalysis} status={status} statusDetail={statusDetail} progress={progress} />
+        <PreviewPanel
+          chat={chat}
+          sanitizedMessages={sanitizedMessages}
+          privacyReport={privacyReport}
+          showRawPreview={showRawPreview}
+          onToggleRawPreview={() => setShowRawPreview((prev) => !prev)}
+          onAnalyze={startAnalysis}
+          status={status}
+          statusDetail={statusDetail}
+          progress={progress}
+        />
       </section>
 
       {analysis && (
         <section className="results">
           <div className="doodle-flower" aria-hidden="true">✿</div>
           <div className="doodle-sparkle" aria-hidden="true">♡</div>
+
+          {/* Privacy Shield Indicator in Report */}
+          <div className="privacy-shield-indicator">
+            <div className="privacy-shield-indicator-row">
+              <span className="privacy-badge">
+                🔒 {privacyReport.totalDetections} sensitive {privacyReport.totalDetections === 1 ? 'item' : 'items'} protected
+              </span>
+              <p>Masked prior to AI synthesis. Output verified to prevent reproduction of secrets.</p>
+            </div>
+            {privacyReport.totalDetections > 0 && (
+              <>
+                <div className="privacy-tags">
+                  {Object.entries(privacyReport.categoryCounts)
+                    .filter(([_, count]) => count > 0)
+                    .map(([cat, count]) => (
+                      <span key={cat} className="privacy-tag">
+                        {formatCategoryLabel(cat)}: {count}
+                      </span>
+                    ))}
+                </div>
+                <details className="privacy-inspection">
+                  <summary>Inspect sanitized items &amp; detection reasons</summary>
+                  <div className="privacy-detections-list">
+                    {privacyReport.detections.map((det, idx) => (
+                      <div key={idx} className="privacy-detection-item">
+                        <span>
+                          <strong>{formatCategoryLabel(det.category)}</strong> ({det.reason})
+                        </span>
+                        <code>{det.masked}</code>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </>
+            )}
+          </div>
+
           <div className="section-heading">
             <Sparkles size={24} />
             <div>
               <h2>Your catch-up report</h2>
-              <p>Generated locally from the imported conversation.</p>
+              <p>Generated locally from sanitized conversation content.</p>
             </div>
             <button className="ghost-button" onClick={() => copyText(formatAnalysisForCopy(analysis))}>
               <Clipboard size={16} /> Copy report
@@ -207,24 +367,82 @@ export default function App() {
   );
 }
 
-function PrivacyPanel({ health, onClear, hasSession }: { health: HealthResponse | null; onClear: () => void; hasSession: boolean }) {
+function PrivacyPanel({
+  health,
+  onClear,
+  hasSession,
+  privacyReport,
+  customTerms,
+  customTermInput,
+  onCustomTermInputChange,
+  onAddCustomTerm,
+  onRemoveCustomTerm
+}: {
+  health: HealthResponse | null;
+  onClear: () => void;
+  hasSession: boolean;
+  privacyReport: PrivacyReport;
+  customTerms: string[];
+  customTermInput: string;
+  onCustomTermInputChange: (val: string) => void;
+  onAddCustomTerm: (term: string) => void;
+  onRemoveCustomTerm: (term: string) => void;
+}) {
   return (
     <aside className="privacy-card">
       <div className="privacy-status">
         <Lock size={20} />
         <div>
-          <strong>Local Privacy Mode</strong>
+          <strong>Privacy Shield Active</strong>
           <span>
-            {health?.ok ? 'Backend connected for metadata only. Chat content stays client-side.' : 'Processing runs entirely on-device.'}
+            {health?.ok ? 'Backend validates connectivity only. Chat stays on device.' : 'Processing runs entirely on-device.'}
           </span>
         </div>
       </div>
       <ul>
-        <li>Parsing happens in your browser.</li>
-        <li>Analysis runs 100% locally on your device.</li>
-        <li>Chat content never leaves your browser.</li>
+        <li>Parsing and sensitive detection happen in your browser.</li>
+        <li>PINs, passwords, OTPs, API keys, emails &amp; phones masked before AI.</li>
+        <li>Chat content never leaves your browser unmasked.</li>
       </ul>
-      <button className="danger-button" onClick={onClear} disabled={!hasSession}>
+
+      {/* User Custom Sensitive Terms Input */}
+      <div className="custom-terms-box">
+        <h4>
+          <ShieldAlert size={15} /> Custom Private Terms
+        </h4>
+        <p>Specify sensitive keywords or codenames to automatically mask.</p>
+        <div className="custom-term-input-row">
+          <input
+            type="text"
+            placeholder="e.g. Project Apollo, Acme Corp"
+            value={customTermInput}
+            onChange={(e) => onCustomTermInputChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                onAddCustomTerm(customTermInput);
+              }
+            }}
+          />
+          <button type="button" onClick={() => onAddCustomTerm(customTermInput)}>
+            <Plus size={14} /> Add
+          </button>
+        </div>
+        {customTerms.length > 0 && (
+          <div className="custom-term-chips">
+            {customTerms.map((term) => (
+              <span key={term} className="custom-term-chip">
+                {term}
+                <button type="button" aria-label={`Remove ${term}`} onClick={() => onRemoveCustomTerm(term)}>
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <button className="danger-button" onClick={onClear} disabled={!hasSession} style={{ marginTop: '16px' }}>
         <Trash2 size={16} /> Clear Session
       </button>
     </aside>
@@ -236,13 +454,15 @@ function UploadPanel({
   chat,
   error,
   onFile,
-  onClear
+  onClear,
+  onLoadSample
 }: {
   inputRef: React.RefObject<HTMLInputElement | null>;
   chat: ImportedChat | null;
   error: string;
   onFile: (file: File) => void;
   onClear: () => void;
+  onLoadSample: () => void;
 }) {
   const [dragging, setDragging] = useState(false);
 
@@ -275,6 +495,11 @@ function UploadPanel({
       <button className="primary-button" onClick={() => inputRef.current?.click()}>
         <Paperclip size={17} /> Browse files
       </button>
+
+      <button type="button" className="sample-button" onClick={onLoadSample}>
+        <Sparkles size={15} /> Try sample chat with secrets
+      </button>
+
       {chat && (
         <div className="file-pill">
           <Archive size={16} />
@@ -291,18 +516,33 @@ function UploadPanel({
 
 function PreviewPanel({
   chat,
+  sanitizedMessages,
+  privacyReport,
+  showRawPreview,
+  onToggleRawPreview,
   onAnalyze,
   status,
   statusDetail,
   progress
 }: {
   chat: ImportedChat | null;
+  sanitizedMessages: ChatMessage[];
+  privacyReport: PrivacyReport;
+  showRawPreview: boolean;
+  onToggleRawPreview: () => void;
   onAnalyze: () => void;
   status: AnalyzerStatus;
   statusDetail: string;
   progress?: number;
 }) {
   const busy = status === 'loading-model' || status === 'analyzing' || status === 'validating';
+
+  const previewText = useMemo(() => {
+    if (!chat) return '';
+    const msgsToPreview = showRawPreview ? chat.messages.slice(0, 8) : sanitizedMessages.slice(0, 8);
+    return messagesToTranscript(msgsToPreview, 2800);
+  }, [chat, sanitizedMessages, showRawPreview]);
+
   return (
     <section className="preview-card">
       <h2>Conversation preview</h2>
@@ -311,10 +551,41 @@ function PreviewPanel({
           <div className="stats-grid">
             <Stat label="Messages" value={chat.stats.totalMessages.toLocaleString()} />
             <Stat label="People" value={chat.stats.participantCount.toString()} />
-            <Stat label="System" value={chat.stats.systemMessages.toString()} />
+            <Stat label="Protected" value={privacyReport.totalDetections.toString()} />
             <Stat label="Range" value={chat.stats.firstTimestamp ? `${chat.stats.firstTimestamp} to ${chat.stats.lastTimestamp}` : 'Unknown'} />
           </div>
-          <pre className="chat-preview">{messagesToTranscript(chat.messages.slice(0, 8), 2800)}</pre>
+
+          {/* Privacy Shield Status Banner in Preview */}
+          <div className="privacy-shield-indicator" style={{ marginBottom: '12px' }}>
+            <div className="privacy-shield-indicator-row">
+              <span className="privacy-badge">
+                🔒 {privacyReport.totalDetections} sensitive items detected &amp; masked
+              </span>
+              <button
+                type="button"
+                className="preview-toggle-button"
+                onClick={onToggleRawPreview}
+                title={showRawPreview ? 'Switch to sanitized view' : 'Switch to raw view'}
+              >
+                {showRawPreview ? <EyeOff size={14} /> : <Eye size={14} />}
+                {showRawPreview ? 'View Sanitized (Default)' : 'Inspect Raw (Private)'}
+              </button>
+            </div>
+            {privacyReport.totalDetections > 0 && (
+              <div className="privacy-tags">
+                {Object.entries(privacyReport.categoryCounts)
+                  .filter(([_, count]) => count > 0)
+                  .map(([cat, count]) => (
+                    <span key={cat} className="privacy-tag">
+                      {formatCategoryLabel(cat)}: {count}
+                    </span>
+                  ))}
+              </div>
+            )}
+          </div>
+
+          <pre className="chat-preview">{previewText}</pre>
+
           <button className="primary-button analyze" onClick={onAnalyze} disabled={busy}>
             {busy ? <LoaderCircle className="spin" size={18} /> : <Sparkles size={18} />}
             {busy ? 'Analyzing...' : 'Start analysis'}
@@ -331,7 +602,7 @@ function PreviewPanel({
       ) : (
         <div className="empty-state">
           <Sparkles size={28} />
-          <p>Your preview and message stats will appear here after import.</p>
+          <p>Your preview, message stats, and Privacy Shield protection will appear here after import.</p>
         </div>
       )}
     </section>

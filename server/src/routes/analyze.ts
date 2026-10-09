@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { analyzeRequestSchema } from '../schemas.js';
 import { analyzeWithGemini } from '../gemini.js';
+import { maskSensitiveTextServer, sanitizeAnalysisResultServer } from '../privacyShield.js';
 
 export const analyzeRouter = Router();
 
@@ -13,7 +14,10 @@ analyzeRouter.post('/', async (request, response) => {
       return;
     }
 
-    const result = await analyzeWithGemini(body.transcript);
+    const sanitizedTranscript = maskSensitiveTextServer(body.transcript);
+    const rawResult = await analyzeWithGemini(sanitizedTranscript);
+    const result = sanitizeAnalysisResultServer(rawResult);
+
     response.json({
       ok: true,
       mode: body.mode,

@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatStats, ImportedChat } from '../types';
+import { sanitizeConversation } from './privacyShield';
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_ZIP_BYTES = 50 * 1024 * 1024;
@@ -59,7 +60,7 @@ export async function importChatFile(file: File): Promise<ImportedChat> {
   const rawText = file.name.toLowerCase().endsWith('.zip') ? await extractChatTextFromZip(rawBytes) : decodeChatText(rawBytes);
 
   if (new TextEncoder().encode(rawText).byteLength > MAX_FILE_BYTES) {
-    throw new Error('This chat is too large for the in-browser model. Try a smaller date range under 2.5 MB.');
+    throw new Error('This chat is too large for the in-browser model. Try a smaller date range under 25 MB.');
   }
 
   const messages = parseWhatsAppExport(rawText);
@@ -67,11 +68,15 @@ export async function importChatFile(file: File): Promise<ImportedChat> {
     throw new Error('No WhatsApp-style messages were found. Check that this is an exported .txt conversation.');
   }
 
+  const { sanitizedMessages, privacyReport } = sanitizeConversation(messages);
+
   return {
     fileName: file.name,
     fileSize: file.size,
     rawText,
     messages,
+    sanitizedMessages,
+    privacyReport,
     stats: getChatStats(messages, rawText)
   };
 }

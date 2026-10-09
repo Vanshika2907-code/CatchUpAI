@@ -77,6 +77,19 @@ export interface ImportedChat {
   fileSize: number;
   rawText: string;
   messages: ChatMessage[];
+  sanitizedMessages: ChatMessage[];
+  privacyReport: {
+    totalDetections: number;
+    categoryCounts: Record<string, number>;
+    detections: Array<{
+      category: string;
+      raw: string;
+      masked: string;
+      startIndex: number;
+      endIndex: number;
+      reason: string;
+    }>;
+  };
   stats: ChatStats;
 }
 
