@@ -1,0 +1,16 @@
+node_modules/
+dist/
+server/dist/
+.env
+.env.local
+.env.*.local
+*.local
+*.log
+coverage/
+.vite/
+.cache/
+models/
+*.chat.txt
+*_chat.txt
+WhatsApp Chat*.txt
+private-exports/
