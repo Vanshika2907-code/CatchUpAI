@@ -3,6 +3,8 @@ import {
   Archive,
   Check,
   Clipboard,
+  Clock,
+  HelpCircle,
   LoaderCircle,
   Lock,
   Paperclip,
@@ -13,7 +15,7 @@ import {
   X
 } from 'lucide-react';
 import type { AnalysisResult, AnalyzerStatus, ImportedChat, Priority } from './types';
-import { analyzeWithGemini, getBackendHealth, type HealthResponse } from './lib/backend';
+import { getBackendHealth, type HealthResponse } from './lib/backend';
 import { analyzeLocally, type AnalyzerUpdate } from './lib/localAnalyzer';
 import { formatAnalysisForCopy, copyText } from './lib/copy';
 import { importChatFile, messagesToTranscript } from './lib/whatsappParser';
@@ -24,7 +26,6 @@ export default function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [chat, setChat] = useState<ImportedChat | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [analysisMode, setAnalysisMode] = useState<'gemini' | 'local' | null>(null);
   const [status, setStatus] = useState<AnalyzerStatus>('idle');
   const [statusDetail, setStatusDetail] = useState('');
   const [progress, setProgress] = useState<number | undefined>();
@@ -40,7 +41,6 @@ export default function App() {
   async function handleFile(file: File) {
     setError('');
     setAnalysis(null);
-    setAnalysisMode(null);
     setCompleted(new Set());
     try {
       const imported = await importChatFile(file);
@@ -55,33 +55,8 @@ export default function App() {
     if (!chat) return;
     setError('');
     setAnalysis(null);
-    setAnalysisMode(null);
     setStatus('analyzing');
     try {
-      if (health?.geminiConfigured) {
-        try {
-          setStatusDetail(`Sending transcript to ${health.geminiModel} through your backend`);
-          setProgress(18);
-          const result = await analyzeWithGemini({
-            messageCount: chat.stats.totalMessages,
-            textLength: chat.stats.textLength,
-            transcript: messagesToTranscript(chat.messages, 2_000_000)
-          });
-          setProgress(100);
-          setStatus('complete');
-          setStatusDetail('Gemini analysis complete');
-          setAnalysisMode('gemini');
-          setAnalysis(result);
-          return;
-        } catch (geminiError) {
-          setStatus('loading-model');
-          setStatusDetail(
-            `Gemini is unavailable right now (${geminiError instanceof Error ? geminiError.message : 'request failed'}). Switching to local browser analysis.`
-          );
-          setProgress(8);
-        }
-      }
-
       await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -91,12 +66,13 @@ export default function App() {
           textLength: chat.stats.textLength
         })
       });
+      setStatusDetail('Starting local browser analysis');
+      setProgress(8);
       const result = await analyzeLocally(chat.messages, (update: AnalyzerUpdate) => {
         setStatus(update.status);
         setStatusDetail(update.detail ?? '');
         setProgress(update.progress);
       });
-      setAnalysisMode('local');
       setAnalysis(result);
     } catch (err) {
       setStatus('error');
@@ -107,7 +83,6 @@ export default function App() {
   function clearSession() {
     setChat(null);
     setAnalysis(null);
-    setAnalysisMode(null);
     setError('');
     setStatus('idle');
     setStatusDetail('');
@@ -119,7 +94,6 @@ export default function App() {
   const attentionItems = useMemo(() => {
     if (!analysis) return [];
     const items = [
-      ...analysis.actionItems.map((item) => ({ type: 'Task', id: item.id, title: item.task, item })),
       ...analysis.importantMessages.map((item) => ({ type: 'Update', id: item.id, title: item.title, item })),
       ...analysis.unansweredQuestions.map((item) => ({ type: 'Question', id: item.id, title: item.question, item }))
     ];
@@ -155,17 +129,13 @@ export default function App() {
 
       {analysis && (
         <section className="results">
+          <div className="doodle-flower" aria-hidden="true">✿</div>
+          <div className="doodle-sparkle" aria-hidden="true">♡</div>
           <div className="section-heading">
             <Sparkles size={24} />
             <div>
               <h2>Your catch-up report</h2>
-              <p>
-                {health?.geminiConfigured
-                  ? analysisMode === 'gemini'
-                    ? `Generated with ${health.geminiModel} through your backend.`
-                    : 'Generated locally after the server AI was unavailable.'
-                  : 'Generated locally from the imported conversation.'}
-              </p>
+              <p>Generated locally from the imported conversation.</p>
             </div>
             <button className="ghost-button" onClick={() => copyText(formatAnalysisForCopy(analysis))}>
               <Clipboard size={16} /> Copy report
@@ -191,14 +161,44 @@ export default function App() {
             }
           />
 
-          <div className="result-grid">
-            <ResultColumn title="Decisions made" empty="No explicit decisions found." items={analysis.decisions} field="decision" />
-            <ResultColumn
-              title="Important messages"
-              empty="No extra important messages found."
-              items={analysis.importantMessages}
-              field="summary"
-            />
+          <TodoList
+            items={analysis.actionItems}
+            completed={completed}
+            onToggle={(id) =>
+              setCompleted((current) => {
+                const next = new Set(current);
+                next.has(id) ? next.delete(id) : next.add(id);
+                return next;
+              })
+            }
+          />
+
+          <div className="result-grid wide">
+            <ResultColumn title="Decisions" empty="No explicit decisions found." items={analysis.decisions} field="decision" icon="stamp" />
+            <ResultColumn title="Important messages" empty="No important messages found." items={analysis.importantMessages} field="summary" icon="note" />
+          </div>
+
+          <div className="question-panel">
+            <div className="panel-title">
+              <HelpCircle size={18} />
+              <h3>Unanswered questions</h3>
+            </div>
+            {analysis.unansweredQuestions.length === 0 ? (
+              <p className="empty-line">No unanswered questions were identified in the analyzed messages.</p>
+            ) : (
+              <div className="question-list">
+                {analysis.unansweredQuestions.map((item) => (
+                  <details key={item.id} className="mini-card">
+                    <summary>
+                      <span className={`chip ${item.priority}`}>{item.priority}</span>
+                      <strong>{item.question}</strong>
+                    </summary>
+                    <p>Asked by: {item.askedBy}</p>
+                    <EvidenceList evidence={item.evidence} />
+                  </details>
+                ))}
+              </div>
+            )}
           </div>
 
           {analysis.limitations.length > 0 && (
@@ -221,20 +221,16 @@ function PrivacyPanel({ health, onClear, hasSession }: { health: HealthResponse 
       <div className="privacy-status">
         <Lock size={20} />
         <div>
-          <strong>{health?.geminiConfigured ? 'Server Gemini Mode' : 'Local Privacy Mode'}</strong>
+          <strong>Local Privacy Mode</strong>
           <span>
-            {health?.geminiConfigured
-              ? 'Backend connected. Analysis tries your server-side Gemini key first.'
-              : health?.ok
-                ? 'Backend connected. Chat content stays client-side.'
-                : 'Backend health pending.'}
+            {health?.ok ? 'Backend connected for metadata only. Chat content stays client-side.' : 'Backend health pending.'}
           </span>
         </div>
       </div>
       <ul>
         <li>Parsing happens in your browser.</li>
-        <li>{health?.geminiConfigured ? `Gemini is enabled on the backend (${health.geminiModel}).` : 'AI runs in a browser worker with Transformers.js.'}</li>
-        <li>API keys stay on the server and are never exposed to the frontend bundle.</li>
+        <li>AI analysis runs in a browser worker with Transformers.js.</li>
+        <li>{health?.geminiConfigured ? 'A server cloud key exists, but this screen does not send chats to it automatically.' : 'No cloud model is used by default.'}</li>
       </ul>
       <button className="danger-button" onClick={onClear} disabled={!hasSession}>
         <Trash2 size={16} /> Clear Session
@@ -424,10 +420,81 @@ function AttentionList({
   );
 }
 
-function ResultColumn({ title, empty, items, field }: { title: string; empty: string; items: any[]; field: string }) {
+function TodoList({
+  items,
+  completed,
+  onToggle
+}: {
+  items: AnalysisResult['actionItems'];
+  completed: Set<string>;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <section className="todo-panel">
+      <div className="panel-title">
+        <Check size={18} />
+        <h3>Your little to-do list</h3>
+      </div>
+      {items.length === 0 ? (
+        <p className="empty-line">No supported tasks were found in this conversation.</p>
+      ) : (
+        <div className="todo-list">
+          {items
+            .slice()
+            .sort((a, b) => priorityOrder.indexOf(a.priority) - priorityOrder.indexOf(b.priority))
+            .map((item) => (
+              <details key={item.id} className={completed.has(item.id) ? 'done todo-item' : 'todo-item'}>
+                <summary>
+                  <button
+                    aria-label={completed.has(item.id) ? 'Mark incomplete' : 'Mark complete'}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      onToggle(item.id);
+                    }}
+                  >
+                    {completed.has(item.id) ? <Check size={15} /> : null}
+                  </button>
+                  <span className={`chip ${item.priority}`}>{item.priority}</span>
+                  <strong>{item.task}</strong>
+                  <small>{item.commitmentType}</small>
+                </summary>
+                <div className="detail-body">
+                  <div className="todo-meta">
+                    <span>Owner: {item.owner}</span>
+                    <span>
+                      <Clock size={14} /> {item.deadline}
+                    </span>
+                    <span>Confidence: {item.confidence}</span>
+                  </div>
+                  <EvidenceList evidence={item.evidence} />
+                </div>
+              </details>
+            ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ResultColumn({
+  title,
+  empty,
+  items,
+  field,
+  icon
+}: {
+  title: string;
+  empty: string;
+  items: any[];
+  field: string;
+  icon: 'stamp' | 'note';
+}) {
   return (
     <section className="result-column">
-      <h3>{title}</h3>
+      <div className="panel-title">
+        <span className={`tiny-doodle ${icon}`} aria-hidden="true" />
+        <h3>{title}</h3>
+      </div>
       {items.length === 0 ? (
         <p className="empty-line">{empty}</p>
       ) : (

@@ -67,8 +67,8 @@ export const analysisResultSchema = z.object({
 
 export function parseModelJson(text: string): AnalysisResult {
   const jsonText = extractJson(text);
-  const parsed = JSON.parse(jsonText);
-  return analysisResultSchema.parse(parsed);
+  const parsed = parseJsonObject(jsonText);
+  return analysisResultSchema.parse(normalizeAnalysis(parsed));
 }
 
 export function extractJson(text: string): string {
@@ -83,6 +83,77 @@ export function extractJson(text: string): string {
   if (first >= 0 && last > first) return trimmed.slice(first, last + 1);
 
   throw new Error('The model did not return JSON.');
+}
+
+function parseJsonObject(jsonText: string): unknown {
+  try {
+    return JSON.parse(jsonText);
+  } catch {
+    const withoutTrailingCommas = jsonText.replace(/,\s*([}\]])/g, '$1');
+    return JSON.parse(withoutTrailingCommas);
+  }
+}
+
+function normalizeAnalysis(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const report = value as Record<string, unknown>;
+
+  return {
+    quickSummary: stringOr(report.quickSummary, 'The local model returned an empty summary.'),
+    importantMessages: normalizeItems(report.importantMessages, 'importantMessages'),
+    decisions: normalizeItems(report.decisions, 'decisions'),
+    actionItems: normalizeItems(report.actionItems, 'actionItems'),
+    unansweredQuestions: normalizeItems(report.unansweredQuestions, 'unansweredQuestions'),
+    limitations: Array.isArray(report.limitations) ? report.limitations.map((item) => String(item)) : []
+  };
+}
+
+function normalizeItems(value: unknown, prefix: string): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+    const normalized = { ...(item as Record<string, unknown>) };
+    normalized.id = stringOr(normalized.id, `${prefix}-${index + 1}`);
+    normalized.priority = normalizePriority(normalized.priority);
+    normalized.confidence = normalizeConfidence(normalized.confidence);
+    normalized.evidence = Array.isArray(normalized.evidence) ? normalized.evidence : [];
+
+    if (prefix === 'actionItems') {
+      normalized.owner = stringOr(normalized.owner, 'unknown');
+      normalized.deadline = stringOr(normalized.deadline, 'unknown');
+      normalized.commitmentType = normalizeCommitmentType(normalized.commitmentType);
+    }
+    if (prefix === 'unansweredQuestions') {
+      normalized.askedBy = stringOr(normalized.askedBy, 'unknown');
+    }
+
+    return normalized;
+  });
+}
+
+function normalizePriority(value: unknown): string {
+  const normalized = String(value ?? '').toLowerCase();
+  if (normalized.includes('urgent')) return 'urgent';
+  if (normalized.includes('important')) return 'important';
+  return 'fyi';
+}
+
+function normalizeConfidence(value: unknown): string {
+  const normalized = String(value ?? '').toLowerCase();
+  if (normalized.includes('high')) return 'high';
+  if (normalized.includes('medium')) return 'medium';
+  return 'low';
+}
+
+function normalizeCommitmentType(value: unknown): string {
+  const normalized = String(value ?? '').toLowerCase();
+  if (normalized.includes('inferred')) return 'inferred';
+  if (normalized.includes('suggestion')) return 'suggestion';
+  return 'explicit';
+}
+
+function stringOr(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
 export function emptyAnalysis(reason: string): AnalysisResult {
