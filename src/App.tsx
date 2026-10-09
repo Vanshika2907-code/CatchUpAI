@@ -201,15 +201,6 @@ export default function App() {
               </div>
             )}
           </div>
-
-          {analysis.limitations.length > 0 && (
-            <div className="limitations">
-              <h3>Notes and limitations</h3>
-              {analysis.limitations.map((item) => (
-                <p key={item}>{item}</p>
-              ))}
-            </div>
-          )}
         </section>
       )}
     </main>
